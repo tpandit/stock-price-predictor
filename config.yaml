@@ -1,0 +1,52 @@
+# Stock Trend Prediction Configuration
+
+# Stock symbols to fetch data for
+symbols:
+  - AAPL
+  - MSFT
+  - AMZN
+  - GOOGL
+  - TSLA
+
+# Date range for data collection
+date_range:
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+
+# Delta table paths
+delta_tables:
+  bronze: "stocks_bronze"
+  silver: "stocks_silver"
+  gold: "stocks_gold"
+
+# MLflow configuration
+mlflow:
+  experiment_name: "stock_trend_prediction"
+  tracking_uri: "databricks"  # Use Databricks MLflow tracking
+
+# Model training configuration
+model:
+  train_test_split: 0.8
+  random_seed: 42
+  features:
+    - daily_return
+    - ma_5
+    - ma_10
+    - ma_20
+    - volatility
+    - volume_change
+
+# Model hyperparameters
+hyperparameters:
+  logistic_regression:
+    maxIter: 100
+    regParam: 0.01
+  random_forest:
+    numTrees: 100
+    maxDepth: 10
+  gbt:
+    maxIter: 100
+    maxDepth: 5
+
+
+
