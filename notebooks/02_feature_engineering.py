@@ -3,10 +3,25 @@ Phase 2: Feature Engineering (Silver Layer)
 Create time-series features from raw stock data
 """
 import sys
-from pathlib import Path
+import os
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
+# Get the notebook path and add parent directory to Python path
+try:
+    notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+    workspace_path = "/".join(notebook_path.split("/")[:-1])
+    if workspace_path not in sys.path:
+        sys.path.insert(0, workspace_path)
+    print(f"Notebook path: {notebook_path}")
+    print(f"Workspace path: {workspace_path}")
+except Exception as e:
+    print(f"Warning: Could not get notebook path: {e}")
+    current_dir = os.getcwd()
+    if "notebooks" in current_dir:
+        workspace_path = current_dir.replace("/notebooks", "")
+        sys.path.insert(0, workspace_path)
+    else:
+        workspace_path = current_dir
+        sys.path.insert(0, workspace_path)
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -16,8 +31,14 @@ from pyspark.sql.functions import (
 from pyspark.sql.window import Window
 from utils.helpers import load_config, get_spark_session
 
-# Load configuration
-config = load_config()
+# Load configuration - use absolute path
+try:
+    config_path = f"{workspace_path}/config.yaml"
+    print(f"Loading config from: {config_path}")
+    config = load_config(config_path)
+except Exception as e:
+    print(f"Warning: Could not use absolute path, trying relative: {e}")
+    config = load_config("config.yaml")
 bronze_table = config['delta_tables']['bronze']
 silver_table = config['delta_tables']['silver']
 

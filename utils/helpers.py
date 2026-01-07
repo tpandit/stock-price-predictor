@@ -8,16 +8,52 @@ from pyspark.sql.types import StructType
 import mlflow
 
 
-def load_config(config_path: str = "config.yaml") -> dict:
+def load_config(config_path: str = None) -> dict:
     """
     Load configuration from YAML file
     
     Args:
-        config_path: Path to config.yaml file
+        config_path: Path to config.yaml file (if None, tries to find it automatically)
         
     Returns:
         Dictionary containing configuration
     """
+    import os
+    
+    if config_path is None:
+        # Try to find config.yaml automatically
+        try:
+            # Try Databricks notebook context (only works in Databricks)
+            try:
+                notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+                workspace_path = "/".join(notebook_path.split("/")[:-1])  # Parent of notebooks/
+                config_path = f"{workspace_path}/config.yaml"
+                if os.path.exists(config_path):
+                    print(f"Found config at: {config_path}")
+                else:
+                    # Fallback to current directory
+                    config_path = "config.yaml"
+            except NameError:
+                # dbutils not available (not in Databricks)
+                config_path = "config.yaml"
+        except Exception as e:
+            # Fallback
+            print(f"Warning: Could not auto-detect config path: {e}")
+            config_path = "config.yaml"
+    elif not os.path.isabs(config_path):
+        # If relative path, try to find it relative to workspace
+        try:
+            try:
+                notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+                workspace_path = "/".join(notebook_path.split("/")[:-1])
+                abs_config_path = f"{workspace_path}/{config_path}"
+                if os.path.exists(abs_config_path):
+                    config_path = abs_config_path
+            except NameError:
+                pass  # dbutils not available, use original path
+        except Exception:
+            pass  # Use original path
+    
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
