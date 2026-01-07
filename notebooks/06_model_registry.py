@@ -8,7 +8,15 @@ import os
 # Get the notebook path and add parent directory to Python path
 try:
     notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-    workspace_path = "/".join(notebook_path.split("/")[:-1])
+    # Remove notebook name and 'notebooks' directory to get workspace root
+    path_parts = notebook_path.split("/")
+    if len(path_parts) > 1 and path_parts[-2] == "notebooks":
+        # Go up two levels: remove notebook name and 'notebooks' directory
+        workspace_path = "/".join(path_parts[:-2])
+    else:
+        # Fallback: just remove notebook name
+        workspace_path = "/".join(path_parts[:-1])
+    
     if workspace_path not in sys.path:
         sys.path.insert(0, workspace_path)
     print(f"Notebook path: {notebook_path}")

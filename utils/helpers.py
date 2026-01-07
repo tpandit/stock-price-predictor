@@ -69,11 +69,28 @@ def get_spark_session(app_name: str = "StockTrendPrediction") -> SparkSession:
     Returns:
         SparkSession instance
     """
-    spark = SparkSession.builder \
-        .appName(app_name) \
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-        .getOrCreate()
+    # Check if we're in Databricks (dbutils available)
+    try:
+        # In Databricks, use existing Spark session
+        from pyspark.sql import SparkSession
+        spark = SparkSession.getActiveSession()
+        if spark is None:
+            spark = SparkSession.builder \
+                .appName(app_name) \
+                .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+                .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+                .getOrCreate()
+        else:
+            # Update app name if possible
+            spark.sparkContext.setJobGroup(app_name, app_name)
+    except NameError:
+        # Not in Databricks, create new session
+        spark = SparkSession.builder \
+            .appName(app_name) \
+            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+            .getOrCreate()
+    
     return spark
 
 
