@@ -6,7 +6,10 @@ import sys
 import os
 
 # Get the notebook path and add parent directory to Python path
+# When run via %run, dbutils is available in the calling notebook's context
+workspace_path = None
 try:
+    # Try to access dbutils (available in Databricks)
     notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
     path_parts = notebook_path.split("/")
     if len(path_parts) > 1 and path_parts[-2] == "notebooks":
@@ -19,14 +22,32 @@ try:
     print(f"Notebook path: {notebook_path}")
     print(f"Workspace path: {workspace_path}")
 except Exception as e:
-    print(f"Warning: Could not get notebook path: {e}")
+    # Fallback: determine workspace path from current working directory or file location
+    print(f"Note: Could not get notebook path from dbutils: {e}")
     current_dir = os.getcwd()
-    if "notebooks" in current_dir:
+    print(f"Current working directory: {current_dir}")
+    
+    # Try to infer workspace path from current directory
+    if "/Workspace/" in current_dir:
+        parts = current_dir.split("/")
+        if "notebooks" in parts:
+            notebooks_idx = parts.index("notebooks")
+            workspace_path = "/".join(parts[:notebooks_idx])
+        else:
+            # Find the user's workspace root
+            workspace_idx = parts.index("Workspace")
+            if workspace_idx + 2 < len(parts):
+                workspace_path = "/".join(parts[:workspace_idx + 3])  # /Workspace/Users/username
+            else:
+                workspace_path = "/".join(parts[:workspace_idx + 1])
+    elif "notebooks" in current_dir:
         workspace_path = current_dir.replace("/notebooks", "")
-        sys.path.insert(0, workspace_path)
     else:
         workspace_path = current_dir
+    
+    if workspace_path and workspace_path not in sys.path:
         sys.path.insert(0, workspace_path)
+    print(f"Using inferred workspace path: {workspace_path}")
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -265,8 +286,35 @@ print("PHASE 4: Model Training & Comparison")
 print("="*80)
 
 # Set up MLflow experiment
-experiment_id = setup_mlflow_experiment(experiment_name, tracking_uri)
-mlflow.set_experiment(experiment_id=experiment_id)
+print(f"\nSetting up MLflow experiment: {experiment_name}")
+print(f"Tracking URI: {tracking_uri}")
+
+try:
+    experiment_id = setup_mlflow_experiment(experiment_name, tracking_uri)
+    print(f"Experiment ID: {experiment_id}")
+    
+    # Set the experiment explicitly
+    if tracking_uri == "databricks":
+        experiment_path = f"/Shared/{experiment_name}"
+    else:
+        experiment_path = experiment_name
+    
+    mlflow.set_experiment(experiment_path)
+    
+    # Verify experiment is set
+    current_experiment = mlflow.get_experiment_by_name(experiment_path)
+    if current_experiment:
+        print(f"✓ MLflow experiment active: {current_experiment.name}")
+        print(f"  Experiment ID: {current_experiment.experiment_id}")
+        print(f"  Artifact Location: {current_experiment.artifact_location}")
+    else:
+        print(f"⚠ Warning: Could not verify experiment setup")
+        
+except Exception as e:
+    print(f"⚠ Error setting up MLflow experiment: {e}")
+    print("Attempting to continue with default experiment...")
+    import traceback
+    traceback.print_exc()
 
 # Prepare data for modeling
 df = gold_df.dropna(subset=feature_columns + ["label"])
@@ -307,6 +355,9 @@ print("Training Logistic Regression...")
 print("-"*60)
 
 with mlflow.start_run(run_name="logistic_regression") as run:
+    print(f"  MLflow Run ID: {run.info.run_id}")
+    print(f"  Run Name: {run.info.run_name}")
+    
     lr = LogisticRegression(
         featuresCol="features",
         labelCol="label",
@@ -322,20 +373,34 @@ with mlflow.start_run(run_name="logistic_regression") as run:
     precision = multiclass_evaluator.setMetricName("weightedPrecision").evaluate(predictions)
     recall = multiclass_evaluator.setMetricName("weightedRecall").evaluate(predictions)
     
-    mlflow.log_param("model_type", "LogisticRegression")
-    mlflow.log_param("maxIter", lr_params["maxIter"])
-    mlflow.log_param("regParam", lr_params["regParam"])
-    mlflow.log_metric("auc", auc)
-    mlflow.log_metric("accuracy", accuracy)
-    mlflow.log_metric("precision", precision)
-    mlflow.log_metric("recall", recall)
+    print(f"  Metrics - AUC: {auc:.4f}, Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
+    
+    try:
+        mlflow.log_param("model_type", "LogisticRegression")
+        mlflow.log_param("maxIter", lr_params["maxIter"])
+        mlflow.log_param("regParam", lr_params["regParam"])
+        mlflow.log_metric("auc", auc)
+        mlflow.log_metric("accuracy", accuracy)
+        mlflow.log_metric("precision", precision)
+        mlflow.log_metric("recall", recall)
+        print("  ✓ Metrics logged to MLflow")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not log metrics: {e}")
+        import traceback
+        traceback.print_exc()
     
     try:
         mlflow.spark.log_model(model, "model")
+        print("  ✓ Model logged to MLflow")
     except Exception as e:
-        print(f"Warning: Could not log model: {e}")
+        print(f"  ⚠ Warning: Could not log model: {e}")
+        import traceback
+        traceback.print_exc()
     
-    mlflow.set_tag("model_type", "LogisticRegression")
+    try:
+        mlflow.set_tag("model_type", "LogisticRegression")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not set tag: {e}")
     
     model_results["LogisticRegression"] = {
         "run_id": run.info.run_id,
@@ -353,6 +418,8 @@ print("Training Random Forest...")
 print("-"*60)
 
 with mlflow.start_run(run_name="random_forest") as run:
+    print(f"  MLflow Run ID: {run.info.run_id}")
+    
     rf = RandomForestClassifier(
         featuresCol="features",
         labelCol="label",
@@ -369,20 +436,34 @@ with mlflow.start_run(run_name="random_forest") as run:
     precision = multiclass_evaluator.setMetricName("weightedPrecision").evaluate(predictions)
     recall = multiclass_evaluator.setMetricName("weightedRecall").evaluate(predictions)
     
-    mlflow.log_param("model_type", "RandomForest")
-    mlflow.log_param("numTrees", rf_params["numTrees"])
-    mlflow.log_param("maxDepth", rf_params["maxDepth"])
-    mlflow.log_metric("auc", auc)
-    mlflow.log_metric("accuracy", accuracy)
-    mlflow.log_metric("precision", precision)
-    mlflow.log_metric("recall", recall)
+    print(f"  Metrics - AUC: {auc:.4f}, Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
+    
+    try:
+        mlflow.log_param("model_type", "RandomForest")
+        mlflow.log_param("numTrees", rf_params["numTrees"])
+        mlflow.log_param("maxDepth", rf_params["maxDepth"])
+        mlflow.log_metric("auc", auc)
+        mlflow.log_metric("accuracy", accuracy)
+        mlflow.log_metric("precision", precision)
+        mlflow.log_metric("recall", recall)
+        print("  ✓ Metrics logged to MLflow")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not log metrics: {e}")
+        import traceback
+        traceback.print_exc()
     
     try:
         mlflow.spark.log_model(model, "model")
+        print("  ✓ Model logged to MLflow")
     except Exception as e:
-        print(f"Warning: Could not log model: {e}")
+        print(f"  ⚠ Warning: Could not log model: {e}")
+        import traceback
+        traceback.print_exc()
     
-    mlflow.set_tag("model_type", "RandomForest")
+    try:
+        mlflow.set_tag("model_type", "RandomForest")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not set tag: {e}")
     
     model_results["RandomForest"] = {
         "run_id": run.info.run_id,
@@ -400,6 +481,8 @@ print("Training Gradient-Boosted Trees...")
 print("-"*60)
 
 with mlflow.start_run(run_name="gbt") as run:
+    print(f"  MLflow Run ID: {run.info.run_id}")
+    
     gbt = GBTClassifier(
         featuresCol="features",
         labelCol="label",
@@ -416,20 +499,34 @@ with mlflow.start_run(run_name="gbt") as run:
     precision = multiclass_evaluator.setMetricName("weightedPrecision").evaluate(predictions)
     recall = multiclass_evaluator.setMetricName("weightedRecall").evaluate(predictions)
     
-    mlflow.log_param("model_type", "GBT")
-    mlflow.log_param("maxIter", gbt_params["maxIter"])
-    mlflow.log_param("maxDepth", gbt_params["maxDepth"])
-    mlflow.log_metric("auc", auc)
-    mlflow.log_metric("accuracy", accuracy)
-    mlflow.log_metric("precision", precision)
-    mlflow.log_metric("recall", recall)
+    print(f"  Metrics - AUC: {auc:.4f}, Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
+    
+    try:
+        mlflow.log_param("model_type", "GBT")
+        mlflow.log_param("maxIter", gbt_params["maxIter"])
+        mlflow.log_param("maxDepth", gbt_params["maxDepth"])
+        mlflow.log_metric("auc", auc)
+        mlflow.log_metric("accuracy", accuracy)
+        mlflow.log_metric("precision", precision)
+        mlflow.log_metric("recall", recall)
+        print("  ✓ Metrics logged to MLflow")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not log metrics: {e}")
+        import traceback
+        traceback.print_exc()
     
     try:
         mlflow.spark.log_model(model, "model")
+        print("  ✓ Model logged to MLflow")
     except Exception as e:
-        print(f"Warning: Could not log model: {e}")
+        print(f"  ⚠ Warning: Could not log model: {e}")
+        import traceback
+        traceback.print_exc()
     
-    mlflow.set_tag("model_type", "GBT")
+    try:
+        mlflow.set_tag("model_type", "GBT")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not set tag: {e}")
     
     model_results["GBT"] = {
         "run_id": run.info.run_id,
@@ -474,52 +571,88 @@ print("="*80)
 best_run_id = best_model_metrics['run_id']
 
 print(f"\nRegistering best model '{model_name}' from run {best_run_id}...")
+print(f"Model URI: runs:/{best_run_id}/model")
 
 try:
+    # Initialize MLflow client
+    client = MlflowClient()
+    print(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
+    
+    # Verify the run exists
+    try:
+        run_info = mlflow.get_run(best_run_id)
+        print(f"✓ Verified run exists: {run_info.info.run_id}")
+        print(f"  Run name: {run_info.info.run_name}")
+    except Exception as e:
+        print(f"⚠ Warning: Could not verify run: {e}")
+    
     # Register model
+    print(f"\nRegistering model...")
     model_version = mlflow.register_model(
         f"runs:/{best_run_id}/model",
         model_name
     )
     
-    print(f"Successfully registered model:")
+    print(f"✓ Successfully registered model:")
     print(f"  Model Name: {model_name}")
     print(f"  Version: {model_version.version}")
     print(f"  Stage: {model_version.current_stage}")
     
     # Add description and tags
-    client = MlflowClient()
-    client.update_model_version(
-        name=model_name,
-        version=model_version.version,
-        description=f"Stock trend prediction model - {best_model_name}. AUC: {best_model_metrics['auc']:.4f}"
-    )
+    try:
+        client.update_model_version(
+            name=model_name,
+            version=model_version.version,
+            description=f"Stock trend prediction model - {best_model_name}. AUC: {best_model_metrics['auc']:.4f}"
+        )
+        print(f"  ✓ Added description")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not add description: {e}")
     
-    client.set_model_version_tag(
-        name=model_name,
-        version=model_version.version,
-        key="model_type",
-        value=str(best_model_name)
-    )
+    try:
+        client.set_model_version_tag(
+            name=model_name,
+            version=model_version.version,
+            key="model_type",
+            value=str(best_model_name)
+        )
+        print(f"  ✓ Added tag")
+    except Exception as e:
+        print(f"  ⚠ Warning: Could not add tag: {e}")
     
     # Transition to Staging
     print(f"\nTransitioning model to 'Staging' stage...")
-    client.transition_model_version_stage(
-        name=model_name,
-        version=model_version.version,
-        stage="Staging"
-    )
-    
-    print(f"Model version {model_version.version} promoted to Staging")
+    try:
+        client.transition_model_version_stage(
+            name=model_name,
+            version=model_version.version,
+            stage="Staging"
+        )
+        print(f"✓ Model version {model_version.version} promoted to Staging")
+    except Exception as e:
+        print(f"⚠ Warning: Could not transition to Staging: {e}")
+        print(f"  Model is registered but may be in 'None' stage")
     
     # Display registered model information
-    registered_model = client.get_registered_model(model_name)
-    print(f"\nModel Name: {registered_model.name}")
-    print(f"Latest Versions: {len(registered_model.latest_versions)}")
+    try:
+        registered_model = client.get_registered_model(model_name)
+        print(f"\n✓ Registered Model Information:")
+        print(f"  Model Name: {registered_model.name}")
+        print(f"  Latest Versions: {len(registered_model.latest_versions)}")
+        for version in registered_model.latest_versions:
+            print(f"    - Version {version.version}: {version.current_stage}")
+    except Exception as e:
+        print(f"⚠ Warning: Could not get registered model info: {e}")
     
 except Exception as e:
-    print(f"Error registering model: {str(e)}")
-    print("Note: Model may already be registered. Check MLflow UI.")
+    print(f"❌ Error registering model: {str(e)}")
+    import traceback
+    traceback.print_exc()
+    print("\nTroubleshooting:")
+    print(f"  1. Check if run {best_run_id} exists in MLflow")
+    print(f"  2. Verify MLflow tracking URI: {mlflow.get_tracking_uri()}")
+    print(f"  3. Check if model artifact exists at runs:/{best_run_id}/model")
+    print(f"  4. Model may already be registered. Check MLflow Model Registry UI.")
 
 # ============================================================================
 # PIPELINE COMPLETE
@@ -533,8 +666,19 @@ print(f"  - Bronze data: {bronze_df.count()} rows")
 print(f"  - Silver data: {silver_df.count()} rows")
 print(f"  - Gold data: {gold_df.count()} rows")
 print(f"  - Best model: {best_model_name} (AUC: {best_model_metrics['auc']:.4f})")
-print(f"\nView results in MLflow UI:")
-print(f"  - Experiment: {experiment_name}")
-print(f"  - Model Registry: {model_name}")
-print("\n" + "="*80)
+print(f"\n" + "="*80)
+print("VIEW RESULTS IN MLFLOW UI:")
+print("="*80)
+if tracking_uri == "databricks":
+    experiment_path = f"/Shared/{experiment_name}"
+else:
+    experiment_path = experiment_name
+print(f"  - Experiment Path: {experiment_path}")
+print(f"  - Experiment ID: {experiment_id}")
+print(f"  - Model Registry Name: {model_name}")
+print(f"  - Tracking URI: {mlflow.get_tracking_uri()}")
+print("\nTo view in Databricks:")
+print(f"  1. Go to MLflow → Experiments → /Shared/{experiment_name}")
+print(f"  2. Go to MLflow → Models → {model_name}")
+print("="*80)
 
