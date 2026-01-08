@@ -1,6 +1,13 @@
 # Stock Trend Prediction Configuration
 
-# Stock symbols to fetch data for
+# Source data configuration
+data_source:
+  # Table name in Databricks where raw stock data is stored
+  source_table: "coinbase"
+  # Symbol to use for this dataset (if source doesn't have symbol column)
+  default_symbol: "TATAGLOBAL"
+
+# Stock symbols to fetch data for (used for mock data generation if source_table not provided)
 symbols:
   - AAPL
   - MSFT
@@ -8,7 +15,7 @@ symbols:
   - GOOGL
   - TSLA
 
-# Date range for data collection
+# Date range for data collection (used for filtering and mock data generation)
 date_range:
   start_date: "2018-01-01"
   end_date: "2024-12-31"

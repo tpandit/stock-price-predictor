@@ -7,6 +7,8 @@ End-to-end ML pipeline for predicting stock price movements using Delta Lake, Sp
 **New to this project?** Start here:
 - **[QUICKSTART.md](QUICKSTART.md)** - Get running in 5 minutes
 - **[INSTRUCTIONS.md](INSTRUCTIONS.md)** - Complete setup and troubleshooting guide
+- **[JOB_SETUP.md](JOB_SETUP.md)** - Set up automated Databricks Jobs
+- **[LOCAL_SETUP.md](LOCAL_SETUP.md)** - Run locally on your machine
 
 ## Overview
 
@@ -108,10 +110,35 @@ Execute the notebooks **sequentially** in order:
 
 ## Quick Start (All at Once)
 
-If you want to run everything in sequence, you can create a master notebook:
+### Option 1: Single Notebook (Recommended for Real Data)
+
+If you have stock data in a Databricks table (e.g., `coinbase`), use the complete pipeline notebook:
 
 ```python
-# master_notebook.py
+# Run the complete pipeline in one notebook
+%run ./complete_pipeline_coinbase
+```
+
+This notebook:
+- Reads directly from your source table (e.g., `coinbase`)
+- Skips data ingestion
+- Runs all phases: transformation → features → labels → training → comparison → registry
+- All in one execution!
+
+### Option 2: Use Master Notebook
+
+A master notebook (`00_master_pipeline.py`) runs all separate notebooks in sequence:
+
+```python
+# Run the master notebook
+%run ./00_master_pipeline
+```
+
+### Option 3: Manual Sequence
+
+Or run notebooks individually:
+
+```python
 %run ./01_ingest_bronze
 %run ./02_feature_engineering
 %run ./03_label_creation
@@ -119,6 +146,10 @@ If you want to run everything in sequence, you can create a master notebook:
 %run ./05_model_comparison
 %run ./06_model_registry
 ```
+
+### Option 4: Set Up Automated Job
+
+For production, set up a Databricks Job to run automatically. See **[JOB_SETUP.md](JOB_SETUP.md)** for detailed instructions.
 
 ## Configuration
 
@@ -195,6 +226,8 @@ databricks/
 ├── pyproject.toml           # uv project config
 ├── requirements.txt         # pip dependencies (backup)
 ├── notebooks/
+│   ├── complete_pipeline_coinbase.py  # Single notebook for complete pipeline
+│   ├── 00_master_pipeline.py         # Master notebook to run all steps
 │   ├── 01_ingest_bronze.py
 │   ├── 02_feature_engineering.py
 │   ├── 03_label_creation.py

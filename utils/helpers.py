@@ -20,43 +20,98 @@ def load_config(config_path: str = None) -> dict:
     """
     import os
     
+    def read_file_databricks(file_path: str) -> str:
+        """Read file content in Databricks, handling both DBFS and workspace paths"""
+        # Try multiple methods to read the file
+        methods = []
+        
+        # Method 1: Try DBFS mount path (if workspace path)
+        if file_path.startswith("/Users/") or file_path.startswith("/Workspace/"):
+            # Convert workspace path to DBFS path
+            if file_path.startswith("/Users/"):
+                dbfs_path = f"/dbfs/Workspace{file_path}"
+            else:
+                dbfs_path = f"/dbfs{file_path}"
+            methods.append(("DBFS mount", lambda: open(dbfs_path, 'r').read(), dbfs_path))
+        
+        # Method 2: Try dbutils.fs.head (for workspace files)
+        if file_path.startswith("/Users/") or file_path.startswith("/Workspace/"):
+            try:
+                methods.append(("dbutils.fs", lambda: dbutils.fs.head(file_path), file_path))
+            except NameError:
+                pass
+        
+        # Method 3: Try direct file open (for local/relative paths)
+        methods.append(("direct open", lambda: open(file_path, 'r').read(), file_path))
+        
+        # Try each method
+        last_error = None
+        for method_name, read_func, path in methods:
+            try:
+                if method_name == "DBFS mount" and not os.path.exists(path):
+                    continue
+                content = read_func()
+                print(f"Successfully read config using {method_name} from: {path}")
+                return content
+            except Exception as e:
+                last_error = e
+                continue
+        
+        # If all methods failed, raise error
+        raise FileNotFoundError(f"Could not read file at {file_path}. Last error: {last_error}")
+    
     if config_path is None:
         # Try to find config.yaml automatically
         try:
-            # Try Databricks notebook context (only works in Databricks)
+            # Try Databricks notebook context
             try:
                 notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-                workspace_path = "/".join(notebook_path.split("/")[:-1])  # Parent of notebooks/
-                config_path = f"{workspace_path}/config.yaml"
-                if os.path.exists(config_path):
-                    print(f"Found config at: {config_path}")
+                path_parts = notebook_path.split("/")
+                if len(path_parts) > 1 and path_parts[-2] == "notebooks":
+                    workspace_path = "/".join(path_parts[:-2])
                 else:
-                    # Fallback to current directory
-                    config_path = "config.yaml"
+                    workspace_path = "/".join(path_parts[:-1])
+                config_path = f"{workspace_path}/config.yaml"
             except NameError:
-                # dbutils not available (not in Databricks)
+                # dbutils not available
                 config_path = "config.yaml"
         except Exception as e:
-            # Fallback
-            print(f"Warning: Could not auto-detect config path: {e}")
             config_path = "config.yaml"
     elif not os.path.isabs(config_path):
         # If relative path, try to find it relative to workspace
         try:
             try:
                 notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-                workspace_path = "/".join(notebook_path.split("/")[:-1])
+                path_parts = notebook_path.split("/")
+                if len(path_parts) > 1 and path_parts[-2] == "notebooks":
+                    workspace_path = "/".join(path_parts[:-2])
+                else:
+                    workspace_path = "/".join(path_parts[:-1])
                 abs_config_path = f"{workspace_path}/{config_path}"
-                if os.path.exists(abs_config_path):
-                    config_path = abs_config_path
+                config_path = abs_config_path
             except NameError:
-                pass  # dbutils not available, use original path
+                pass  # Use original path
         except Exception:
             pass  # Use original path
     
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
+    # Read the file using Databricks-compatible method
+    try:
+        content = read_file_databricks(config_path)
+        config = yaml.safe_load(content)
+        return config
+    except Exception as e:
+        # Try alternative: relative path in current directory
+        if config_path != "config.yaml":
+            try:
+                print(f"Trying relative path 'config.yaml' as fallback...")
+                with open("config.yaml", 'r') as f:
+                    config = yaml.safe_load(f)
+                print(f"Successfully loaded config from: config.yaml (relative)")
+                return config
+            except:
+                pass
+        
+        raise FileNotFoundError(f"Could not find config.yaml. Tried: {config_path}. Error: {e}")
 
 
 def get_spark_session(app_name: str = "StockTrendPrediction") -> SparkSession:
@@ -122,6 +177,61 @@ def validate_delta_table_schema(spark: SparkSession, table_name: str, expected_s
     except Exception as e:
         print(f"Error validating table {table_name}: {str(e)}")
         return False
+
+
+def is_local_path(path: str) -> bool:
+    """
+    Check if a path is a local file path (starts with file:// or is a local path)
+    
+    Args:
+        path: Path to check
+        
+    Returns:
+        True if local path, False if table name
+    """
+    return path.startswith("file://") or path.startswith("/") or "://" not in path and "/" in path
+
+
+def read_delta_table(spark: SparkSession, table_path: str):
+    """
+    Read from Delta table, supporting both Databricks table names and local file paths
+    
+    Args:
+        spark: SparkSession instance
+        table_path: Either a table name (e.g., "stocks_bronze") or file path (e.g., "file:///tmp/delta/stocks_bronze")
+        
+    Returns:
+        DataFrame
+    """
+    if is_local_path(table_path):
+        return spark.read.format("delta").load(table_path)
+    else:
+        return spark.read.format("delta").table(table_path)
+
+
+def write_delta_table(df, table_path: str, mode: str = "overwrite"):
+    """
+    Write to Delta table, supporting both Databricks table names and local file paths
+    
+    Args:
+        df: DataFrame to write
+        table_path: Either a table name (e.g., "stocks_bronze") or file path (e.g., "file:///tmp/delta/stocks_bronze")
+        mode: Write mode (default: "overwrite")
+        
+    Returns:
+        None
+    """
+    if is_local_path(table_path):
+        # For local paths, ensure directory exists
+        import os
+        if table_path.startswith("file://"):
+            actual_path = table_path[7:]  # Remove file:// prefix
+        else:
+            actual_path = table_path
+        os.makedirs(actual_path, exist_ok=True)
+        df.write.format("delta").mode(mode).save(table_path)
+    else:
+        df.write.format("delta").mode(mode).saveAsTable(table_path)
 
 
 def setup_mlflow_experiment(experiment_name: str, tracking_uri: str = "databricks") -> str:
